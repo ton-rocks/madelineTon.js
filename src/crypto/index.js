@@ -3,14 +3,15 @@ import {
     useWebCryptoSha1,
     useWorkers
 } from '../crypto-sync/poly'
-import CryptoWorker from './crypto-worker'
+//import CryptoWorker from './crypto-worker'
 import CryptoSync from './crypto-sync'
 import CryptoWebCrypto from './crypto-webcrypto'
 import {
     bufferConcat
 } from '../tools'
 
-let CryptoAsync = useWorkers ? CryptoWorker : CryptoSync
+//let CryptoAsync = useWorkers ? CryptoWorker : CryptoSync
+let CryptoAsync = CryptoSync
 if (useWebCrypto) {
     if (useWebCryptoSha1) {
         CryptoAsync.prototype.sha1 = CryptoWebCrypto.prototype.sha1

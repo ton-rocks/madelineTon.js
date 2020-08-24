@@ -41,6 +41,7 @@ class Lite {
                 861606190: 'wss://ton-ws.madelineproto.xyz/testnetDebug',
                 1137658550: 'wss://ton-ws.madelineproto.xyz/testnet'
             },
+            maxConnections: 3,
            ...settings
         }
         let config = settings.config
@@ -188,50 +189,233 @@ class Lite {
         return result
     }
     /**
-     * Connect to all liteservers
+     * Connect to liteservers
      */
     async connect() {
-        let promises = [];
+
+        let cnt = 0;
+        if (this.settings['wssProxies'].length === 0) {
+            return;
+        }
+
+        this.connList = [];
+        this.conns = {};
         for (const key in this.config['liteservers']) {
-            const uri = this.settings['wssProxies'][this.config['liteservers'][key]['ip']]
-            const connection = new ADNLConnection(this.getTL(), this.config['liteservers'][key]['id'], uri)
-            promises.push(connection.connect().then(() => this.connections.push(connection)))
+            const uri = this.settings['wssProxies'][this.config['liteservers'][key]['ip']];
+            this.newConnection(this.config['liteservers'][key]);
+            this.connList.push(uri);
         }
-        await Promise.all(promises)
-
-        // Cache server version
-        await this.getVersion()
-
-        console.log(`Server version is ${this.server.version >> 8}.${this.server.version & 0xFF}, capabilities ${this.server.capabilities}`)
-        if (!this.server.ok) {
-            console.error(`Server version is too old (at least ${this.min_ls_version >>8}.${this.min_ls_version & 0xFF} with capabilities ${this.min_ls_capabilities} required), some queries are unavailable!`)
-        }
-        console.log(`Server time is ${this.serverTime}`)
-
-        /*
-        // Get masterchain info
-        await this.getMasterchainInfo()
-        */
-    }
-    /**
-     * Get masterchain info (equivalent to `last`)
-     * @returns {Object} liteServer.masterchainInfoExt or liteServer.masterchainInfo, depending on liteserver version
-     */
-    last() {
-        return this.getMasterchainInfo()
-    }
-    /**
-     * Get masterchain info (equivalent to `last`)
-     * @returns {Object} liteServer.masterchainInfoExt or liteServer.masterchainInfo, depending on liteserver version
-     */
-    async getMasterchainInfo() {
-        const mode = (this.server.capabilities[0] & 2) ? 0 : -1;
-        const info = await this.methodCall(
-            mode < 0 ? 'liteServer.getMasterchainInfo' : 'liteServer.getMasterchainInfoExt', {
-                mode,
+        function shuffle(a) {
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
             }
+            return a;
+        }
+        this.connList = shuffle(this.connList);
+        this.connCurrent = 0;
+
+        const maxConnections = Math.min(this.settings.maxConnections, this.connList.length);
+        this.connPending = 0;
+        this.promiseList = [];
+
+        await new Promise((resolve, reject) => {
+
+            this.connectionPromise = { resolve, reject };
+
+            for (let i = 0; i < maxConnections; i++) {
+                this.promiseList.push(this.nextConnection());
+            }
+        });
+    }
+
+    newConnection(liteserver) {
+        const uri = this.settings['wssProxies'][liteserver['ip']];
+
+        if (this.conns[uri])
+            return this.conns[uri];
+
+        let conn = {
+            uri,
+            config: liteserver,
+            lastConnected: 0,
+            lastAction: 0,
+            failCount: 0,
+            status: 'disconnected',
+            connection: new ADNLConnection(this.getTL(), liteserver['id'], uri)
+        };
+
+        this.conns[uri] = conn;
+
+        return conn;
+    }
+
+    getActiveConnection() {
+        let l = [];
+        for (let i in this.conns) {
+            if (this.conns[i].status === 'connected')
+                l.push(this.conns[i]);
+        }
+        return l[fastRandomInt(l.length)];
+    }
+
+    /*
+    connect to next server
+    */
+    async nextConnection() {
+        if (!this.conns || !this.connList)
+            return;
+
+        const whoami = this.connPending;
+        this.connPending += 1;
+
+        for (let i = 0; i < this.connList.length; i++) {
+            //console.log('Pending connection ' + whoami, ': search for next (from ' + this.connCurrent + '/' + this.connList.length + ')');
+
+            if (this.connCurrent >= this.connList.length) {
+                this.connCurrent = 0;
+            }
+
+            const uri = this.connList[this.connCurrent];
+            this.connCurrent += 1;
+            let conn = this.conns[uri];
+
+            if (!conn || conn.status !== 'disconnected')
+                continue;
+
+            conn.status = 'pending';
+            const tm = new Date().getTime() - conn.lastAction;
+            if (tm < 20000) {
+                //console.log('Pending connection ' + whoami, ': wait ' + (30000 - tm) + 'ms for connection to ' + conn.uri);
+                await (new Promise(resolve => setTimeout(resolve, 30000 - tm)));
+            }
+
+            //console.log('Pending connection ' + whoami, ': connecting to ' + conn.uri);
+
+            const res = await this.connectToServer(conn.uri);
+            if (res) {
+                console.log('Pending connection ' + whoami, ': connected to ' + conn.uri + `: server diff is ${conn.tm.lastUtime - conn.tm.serverTime}`);
+                if (this.connectionPromise) {
+                    this.connectionPromise.resolve();
+                    this.connectionPromise = undefined;
+                }
+                return;
+            }
+            console.log('Pending connection ' + whoami, ': connect to ' + conn.uri + ' failed');
+        }
+
+        this.connPending -= 1;
+
+        console.log('Pending connection ' + whoami, ': connect to server failed');
+
+        if (this.connPending === 0 && this.connectionPromise) {
+            this.connectionPromise.reject(Error('Connection giveup'));
+            this.connectionPromise = undefined;
+        }
+
+    }
+
+    async connectionLost(uri) {
+        if (!this.conns[uri])
+            return;
+
+        console.log(uri, 'disconnected');
+        //this.conns[uri].lastAction = new Date().getTime();
+        this.conns[uri].status = 'disconnected';
+        this.conns[uri].connection = undefined;
+
+        await this.nextConnection();
+    }
+
+    async connectToServer(uri) {
+
+        let conn = this.conns[uri];
+
+        if (!conn)
+            return false;
+
+        try {
+            conn.connection = new ADNLConnection(this.getTL(), conn.config['id'], conn.uri);
+            await conn.connection.connect();
+
+            conn.lastConnected = conn.lastAction = new Date().getTime();
+            conn.status = 'requestInfo';
+
+            conn.masterchainInfo = await this.getMasterchainInfo(conn);
+
+            conn.server = {
+                version: conn.masterchainInfo.version,
+                capabilities: conn.masterchainInfo.capabilities
+            }
+            //console.log(`Server version is ${conn.server.version >> 8}.${conn.server.version & 0xFF}, capabilities ${conn.server.capabilities}`)
+
+            const ok = (conn.server.version >= this.min_ls_version) && !(~conn.server.capabilities[0] & this.min_ls_capabilities);
+            if (!ok) {
+                throw Error(`Server version is too old (at least ${this.min_ls_version >>8}.${this.min_ls_version & 0xFF} with capabilities ${this.min_ls_capabilities} required), some queries are unavailable!`);
+            }
+
+            conn.tm = {
+                lastUtime: conn.masterchainInfo.last_utime,
+                serverTime: conn.masterchainInfo.now,
+                gotServerTimeAt: Date.now() / 1000 | 0
+            }
+            //console.log(`Server time is ${conn.tm.serverTime}, last known block timestamp ${conn.tm.lastUtime}`);
+
+            const last_utime = conn.masterchainInfo.last_utime || 0;
+            const last = conn.masterchainInfo.last;
+
+            if (last_utime > conn.tm.serverTime) {
+                throw Error(`server claims to have a masterchain block  created at ${last_utime} (${last_utime - conn.tm.serverTime} seconds in the future)`);
+            } else if (last_utime < conn.tm.serverTime - 60) {
+                throw Error(`server appears to be out of sync: its newest masterchain block is created at ${last_utime} (${conn.tm.serverTime - last_utime} seconds ago according to the server's clock)`);
+            } else if (Math.abs(last_utime - conn.tm.gotServerTimeAt) > 60) {
+                throw Error(`either the server is out of sync, or the local clock is set incorrectly: the newest masterchain block known to server is created at ${last_utime} (${conn.tm.serverTime - conn.tm.gotServerTimeAt} seconds ago according to the local clock)`);
+            }
+
+            const ourZeroState = {
+                _: "tonNode.zeroStateIdExt",
+                file_hash: this.config.validator.zero_state.file_hash,
+                root_hash: this.config.validator.zero_state.root_hash,
+                workchain: this.config.validator.zero_state.workchain
+            };
+            const serverZeroState = conn.masterchainInfo.init;
+            if (!deepEqual(serverZeroState, ourZeroState)) {
+                console.error("Zerostate invalid: should be ", ourZeroState, " is ", serverZeroState);
+                throw Error("Zerostate invalid");
+            }
+
+            conn.connection.onClose = () => this.connectionLost(conn.uri);
+
+            conn.status = 'connected';
+            return true;
+        } catch (e) {
+            console.log(conn.uri, 'Connect failed:', e);
+            conn.status = 'disconnected';
+            conn.connection = undefined;
+            conn.failCount += 1;
+            conn.lastAction = new Date().getTime();
+            return false;
+        }
+
+    }
+    /**
+     * Get masterchain info (equivalent to `last`)
+     * @returns {Object} liteServer.masterchainInfoExt or liteServer.masterchainInfo, depending on liteserver version
+     */
+    last(conn) {
+        return this.getMasterchainInfo(conn)
+    }
+    /**
+     * Get masterchain info (equivalent to `last`)
+     * @returns {Object} liteServer.masterchainInfoExt or liteServer.masterchainInfo, depending on liteserver version
+     */
+    async getMasterchainInfo(conn) {
+        //const mode = (this.server.capabilities[0] & 2) ? 0 : -1;
+        const info = await this.methodCall('liteServer.getMasterchainInfoExt', {
+                mode: 0,
+            }, conn
         )
-        this._parseMasterchainInfo(info) // Reduce clutter for abstraction methods
+        //this._parseMasterchainInfo(info) // Reduce clutter for abstraction methods
 
         return info
     }
@@ -239,10 +423,10 @@ class Lite {
      * Request block by ID
      * @param {Object} id Block ID
      */
-    async requestBlock(id) {
+    async requestBlock(id, conn) {
         const block = await this.methodCall('liteServer.getBlock', {
             id
-        })
+        }, conn)
         if (!deepEqual(block.id, id)) {
             console.error(block, id)
             throw new Error('Got wrong block!')
@@ -255,26 +439,26 @@ class Lite {
      * Get server version
      * @returns {Object}
      */
-    async getVersion() {
-        const server = await this.methodCall('liteServer.getVersion')
-        this._setServerVersion(server)
-        this._setServerTime(server.now)
+    async getVersion(conn) {
+        const server = await this.methodCall('liteServer.getVersion', {}, conn)
+        //this._setServerVersion(server)
+        //this._setServerTime(server.now)
         return server
     }
     /**
      * Get server time
      * @returns {Object}
      */
-    async getTime() {
-        const time = await this.methodCall('liteServer.getTime')
-        this._setServerTime(time.now)
+    async getTime(conn) {
+        const time = await this.methodCall('liteServer.getTime', {}, conn)
+        //this._setServerTime(time.now)
         return time
     }
 
 
 
     // Parser functions
-
+    /*
     _setServerVersion(server) {
         this.server = server
         this.server.ok = (server.version >= this.min_ls_version) && !(~server.capabilities[0] & this.min_ls_capabilities);
@@ -317,9 +501,6 @@ class Lite {
         }
         if (!this.zeroState) {
             this.zeroState = zero
-            /*zero._ = 'tonNode.blockIdExt'
-            zero.seqno = 0
-            zero.shard = [0, -2147483648]*/
             //this._registerBlockId(zero)
             console.log("Zerostate OK!")
         }
@@ -352,13 +533,14 @@ class Lite {
         //this._registerBlockId(id)
         // Here we should save the block to storage
     }
+    */
 
     /**
      * Call liteserver method
      * @param {string} method Liteserver method name
      * @param {Object} args   Arguments
      */
-    methodCall(method, args = {}) {
+    methodCall(method, args = {}, conn=undefined) {
         args['_'] = method
         args['id'] = args['id'] || this.lastMasterchainId
 
@@ -369,7 +551,15 @@ class Lite {
             data
         }).bBuf
 
-        return this.connections[fastRandomInt(this.connections.length)].query(data)
+        if (conn !== undefined) {
+            return conn.connection.query(data);
+        } else {
+            conn = this.getActiveConnection();
+            if (conn === undefined)
+                throw Error('No active connections');
+            return conn.connection.query(data);
+        }
+        //return this.connections[fastRandomInt(this.connections.length)].query(data)
     }
 
     /**
@@ -377,13 +567,22 @@ class Lite {
      * @param {string} method RLDP method name
      * @param {Object} args   Arguments
      */
-    rldpCall(method, args = {}) {
+    rldpCall(method, args = {}, conn=undefined) {
         args['_'] = method
 
         let data
         data = this.TLParser.serialize(new Stream, args).bBuf
 
-        return this.connections[fastRandomInt(this.connections.length)].queryRLDP(data)
+        if (conn !== undefined) {
+            return conn.connection.queryRLDP(data);
+        } else {
+            conn = this.getActiveConnection();
+            if (conn === undefined)
+                throw Error('No active connections');
+            return conn.connection.queryRLDP(data);
+        }
+
+        //return this.connections[fastRandomInt(this.connections.length)].queryRLDP(data)
     }
     getTL() {
         return this.TLParser

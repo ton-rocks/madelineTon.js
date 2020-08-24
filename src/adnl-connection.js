@@ -64,12 +64,18 @@ class ADNLConnection {
         )
 
         let socket = new ADNL
-        socket.onClose = () => console.log("Closed connection!")
+        socket.onClose = () => {
+            //console.log(this.uri, "Closed connection!");
+            this.close();
+            if (this.onClose) {
+                this.onClose();
+            }
+        }
         socket.onMessage = message => this.onMessage(message)
         try {
             await socket.connect(ctx)
         } catch (e) {
-            console.log("connect error: ", e);
+            console.log(this.uri, "connect error: ", e);
         }
 
         this.socket = socket
@@ -85,12 +91,13 @@ class ADNLConnection {
     onMessage(message) {
         message = this.TLParser.deserialize(message)
         if (message['_'] === 'tcp.pong') {
+            //console.log(this.uri, 'pong');
             this.pings[message['random_id']].res(message)
             delete this.pings[message['random_id']]
             return
         }
         if (message['_'] !== 'adnl.message.answer') {
-            console.log("Weird message: ", message)
+            console.log(this.uri, "Weird message: ", message)
             return
         }
         clearTimeout(this.requests[message['query_id']]['timeoutId'])
@@ -167,6 +174,7 @@ class ADNLConnection {
                 rej
             }
         })
+        //console.log(this.uri, 'ping');
         return this.socket.write(ping).then(() => promise)
     }
 

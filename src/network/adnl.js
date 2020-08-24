@@ -23,6 +23,7 @@ class ADNL {
      * @param {Object} ctx Custom connection context
      */
     async connect(ctx) {
+        this.uri = ctx.uri;
         this.crypto = ctx.crypto
 
         this.encrypt = await this.crypto.getCtr(...ctx.encrypt)
@@ -128,7 +129,7 @@ class ADNL {
                 throw new Error('SHA256 mismatch!');
         } else {
             if (message.length === 8) {
-                console.log("OK, got empty message!")
+                //console.log(this.uri, "OK, got empty message!")
             } else {
                 this.onMessage(new Stream(message.slice(8).buffer))
             }
@@ -148,7 +149,9 @@ class ADNL {
 
         payload = payload.bBuf
 
-        return this.encrypt.process(payload).then(payload => this.socket.send(payload))
+        return this.encrypt.process(payload).then(payload => {
+            if (this.socket) this.socket.send(payload);
+        })
     }
     getBuffer(length) {
         const s = new Stream(new Uint32Array(17 + (length || 0)))
@@ -157,11 +160,11 @@ class ADNL {
     }
 
     close() {
-        console.log("Closing socket!")
         if (this.socket) {
-            this.socket.close()
-            this.socket = undefined
-            this.onClose()
+            //console.log(this.uri, "Closing socket!");
+            this.socket.close();
+            this.socket = undefined;
+            this.onClose();
         }
     }
 
