@@ -8,6 +8,13 @@ import {
     fastRandomInt
 } from "../crypto-sync/random"
 
+var ws;
+if (typeof window === 'undefined') {
+    ws = require('ws');
+} else {
+    ws = WebSocket;
+}
+
 class ADNL {
     allRead = 0 // Data read thus far (from all active buffers)
     toRead = 4
@@ -32,7 +39,7 @@ class ADNL {
         this.previous = Promise.resolve()
 
         await new Promise((resolve, reject) => {
-            this.socket = new WebSocket(ctx.uri)
+            this.socket = new ws(ctx.uri)
             this.socket.binaryType = "arraybuffer"
             this.socket.onmessage = message => {
                 message = message.data

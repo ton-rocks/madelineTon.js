@@ -38,7 +38,7 @@ class CtrProcessor {
     init(key, iv) {
         this.name = "AES-CTR"
         this.by = 0
-        this.counter = iv
+        this.counter = new Uint8Array(iv.buffer);
         this.length = 16
         this.leftover = new Uint8Array(0)
         return windowObject.crypto.subtle.importKey("raw", key, "AES-CTR", false, ["encrypt"])
@@ -69,7 +69,7 @@ class CtrProcessor {
         }
         //console.log(new Uint8Array(data))
 
-        incCounter(this.counter, this.by)
+        this.counter = new Uint8Array(incCounter(new Uint32Array(this.counter.buffer), this.by).buffer);
         this.by = Math.floor(lengthCombined / 16)
         this.leftover = new Uint8Array(data.slice(this.by * 16, lengthCombined))
         //console.log(this.by, this.leftover)

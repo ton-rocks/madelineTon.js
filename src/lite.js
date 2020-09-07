@@ -5,7 +5,7 @@ import ADNLConnection from "./adnl-connection";
 import {
     fastRandomInt
 } from "./crypto-sync/random";
-import deepEqual from 'deep-equal'
+//import deepEqual from 'deep-equal'
 import {
     bufferViewEqual,
     atobInt8
@@ -379,7 +379,10 @@ class Lite {
                 workchain: this.config.validator.zero_state.workchain
             };
             const serverZeroState = conn.masterchainInfo.init;
-            if (!deepEqual(serverZeroState, ourZeroState)) {
+            if (serverZeroState.file_hash.toString() !== ourZeroState.file_hash.toString() ||
+                serverZeroState.root_hash.toString() !== ourZeroState.root_hash.toString() ||
+                serverZeroState.workchain !== ourZeroState.workchain) {
+            //if (!deepEqual(serverZeroState, ourZeroState)) {
                 console.error("Zerostate invalid: should be ", ourZeroState, " is ", serverZeroState);
                 throw Error("Zerostate invalid");
             }
@@ -427,7 +430,10 @@ class Lite {
         const block = await this.methodCall('liteServer.getBlock', {
             id
         }, conn)
-        if (!deepEqual(block.id, id)) {
+        if (block.id.file_hash.toString() !== id.file_hash.toString() ||
+            block.id.root_hash.toString() !== id.root_hash.toString() ||
+            block.id.workchain !== id.workchain) {
+        //if (!deepEqual(block.id, id)) {
             console.error(block, id)
             throw new Error('Got wrong block!')
         }

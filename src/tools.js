@@ -107,7 +107,11 @@ const transferPoly = function (source, length) {
 const transfer = ArrayBuffer.transfer || transferPoly
 
 const atobInt8 = data => {
-    data = atob(data);
+    if (typeof window === 'undefined') {
+        data = Buffer.from(data, 'base64').toString('binary');
+    } else {
+        data = atob(data);
+    }
     let view = new Uint8Array(data.length);
     for (let x = 0; x < data.length; x++) {
         view[x] = data.charCodeAt(x)

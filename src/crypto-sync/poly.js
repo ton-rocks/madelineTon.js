@@ -13,6 +13,12 @@ if (windowObject.msCrypto) {
 if (windowObject.crypto && windowObject.crypto.webkitSubtle) {
     windowObject.crypto.subtle = windowObject.crypto.webkitSubtle
 }
+if (!windowObject.crypto) {
+    console.log("Using node.js webcrypto polyfill");
+    const { Crypto } = require("@peculiar/webcrypto");
+    const crypto = new Crypto();
+    windowObject.crypto = crypto;
+}
 let useWebCrypto = !!windowObject.crypto
 let useWebCryptoRandom = useWebCrypto && !!windowObject.crypto.getRandomValues
 let useWebCryptoSha1 = useWebCrypto && !windowObject.msCrypto
